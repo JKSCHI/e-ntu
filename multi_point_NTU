@@ -1,0 +1,132 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Apr 28 22:03:06 2025
+
+@author: j.kschiedel
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Statistische Analyse – 20% Stichprobe aus Messdaten
+Autor: j.kschiedel · 28-Apr-2025
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from CoolProp.CoolProp import PropsSI
+from ht.hx import (
+    F_LMTD_Fakheri,
+    calc_Cmin,
+    NTU_from_UA,
+    effectiveness_from_NTU
+)
+
+# Lokale LMTD-Funktion (Gegenstrom)
+def LMTD(Thi, Tho, Tci, Tco):
+    dT1 = Thi - Tco
+    dT2 = Tho - Tci
+    if abs(dT1 - dT2) < 1e-6:
+        return dT1
+    return (dT1 - dT2) / np.log(dT1 / dT2)
+
+# Pfad & Sensornamen
+CSV_PATH = (
+    r"C:/Users/j.kschiedel/2G Energy AG/Wärmepumpe 2G - WP Entwicklung "
+    r"- WP Entwicklung/Development/01_R513A/AW0103_Solebad_Werne/"
+    r"02_Dateauswertung_Python/Output_Data/AW0104_Analyzed.csv"
+)
+T_H_IN, T_H_OUT = 'TT_34_06','TT_34_07'
+T_C_IN, T_C_OUT = 'TT_34_01','TT_34_02'
+P_H,   P_C      = 'PT_34_04','PT_34_01'
+MASS           = 'Cori_m'  # kg/h
+
+# CoolProp-String
+FLUID = "REFPROP::R513A.MIX"
+# Fallback-cp
+CP_H_FB = 1860.0
+CP_C_FB = 1900.0
+
+# 1) Daten laden & filtern
+df = (pd.read_csv(CSV_PATH, parse_dates=['_time'])
+      .dropna(subset=[T_H_IN,T_H_OUT,T_C_IN,T_C_OUT,P_H,P_C,MASS])
+      .query(f"{MASS}>0 and {T_H_IN}>{T_H_OUT} and {T_C_OUT}>{T_C_IN}")
+      .reset_index(drop=True))
+
+# 2) 20%-Stichprobe
+sample = df.sample(frac=0.20, random_state=42).reset_index(drop=True)
+sample['m_kg_s'] = sample[MASS] / 3600.0  # kg/s
+
+# 3) Berechnung pro Zeile
+def calc_hx(row):
+    Thi = row[T_H_IN] + 273.15
+    Tho = row[T_H_OUT] + 273.15
+    Tci = row[T_C_IN] + 273.15
+    Tco = row[T_C_OUT] + 273.15
+    ph, pc = row[P_H]*1e5, row[P_C]*1e5
+    m = row['m_kg_s']
+
+    # c_p via CoolProp mit Fallback
+    try:
+        cph = PropsSI("Cpmass","T",0.5*(Thi+Tho),"P",ph,FLUID)
+        cpc = PropsSI("Cpmass","T",0.5*(Tci+Tco),"P",pc,FLUID)
+    except Exception:
+        cph, cpc = CP_H_FB, CP_C_FB
+
+    # C_min und Q
+    Cmin = calc_Cmin(mh=m, mc=m, Cph=cph, Cpc=cpc)
+    Qh   = m * cph * (Thi - Tho)
+    Qc   = m * cpc * (Tco - Tci)
+    Q    = 0.5 * (Qh + Qc)
+
+    # LMTD & F
+    dTlm = LMTD(Thi, Tho, Tci, Tco)
+    try:
+        F = F_LMTD_Fakheri(
+            Tci=row[T_C_IN], Tco=row[T_C_OUT],
+            Thi=row[T_H_IN], Tho=row[T_H_OUT],
+            shells=1
+        )
+    except Exception:
+        F = 1.0
+
+    # UA, NTU, ε
+    UA  = Q / (F * dTlm)
+    NTU = NTU_from_UA(UA=UA, Cmin=Cmin)
+    Cr  = Cmin / (m * max(cph, cpc))
+    eps = effectiveness_from_NTU(NTU=NTU, Cr=Cr, subtype='counterflow')
+
+    return pd.Series({
+        'Q_kW'     : Q/1e3,
+        'UA_W_per_K': UA,
+        'NTU'      : NTU,
+        'epsilon'  : eps,
+        'LMTD_K'   : dTlm,
+        'F_factor' : F,
+        'cph'      : cph,
+        'cpc'      : cpc
+    })
+
+# 4) Berechnung & Statistik
+results = sample.apply(calc_hx, axis=1)
+#%%
+# Nur numerische Spalten für die Statistik verwenden
+stats = results.agg(['median', 'mean', 'std', 'min', 'max']).T.round(3)
+#%%
+output_path = r"C:/Users/j.kschiedel/2G Energy AG/Wärmepumpe 2G - WP Entwicklung - WP Entwicklung/Development/01_R513A/AW0103_Solebad_Werne/02_Dateauswertung_Python/AW0104_IHX_NTU.csv"  # passe den Pfad an
+stats.to_csv(output_path, index=True)
+#%%
+print("\n>>> Deskriptive Statistik (20% Stichprobe) <<<")
+print(stats)
+
+print("\n--- 10 zufällige Ergebnisse ---")
+print(results.sample(10, random_state=1)
+      .round(3)
+      .to_string(index=False))
+
+# 5) NTU über Zeit plotten
+df_res = pd.concat([sample.reset_index(drop=True), results.reset_index(drop=True)], axis=1)
+plt.figure(figsize=(10,4))
+plt.scatter(df_res['_time'], df_res['NTU'], s=5, alpha=0.6)
+plt.xlabel('Zeit'); plt.ylabel('NTU'); plt.title('NTU – Zeitverlauf')
+plt.xticks(rotation=45); plt.tight_layout(); plt.show()
