@@ -1,0 +1,44 @@
+# -*- coding: utf-8 -*-
+"""
+Berechnung der ε-NTU-Kennwerte mit Median-UA und frei wählbaren Inlet-Temperaturen und Drücken
+Autor: ChatGPT · 2025-04-28
+"""
+
+from pprint import pprint
+import CoolProp.CoolProp as CP
+from ht.hx import effectiveness_NTU_method
+
+# ── 1) Feste Mittelwerte aus Statistik ─────────────────────────────
+UA_MEAN = 520.611    # W/K, Mittelwert aus Stichprobe
+MH_MEAN = 1.2        # kg/s, angenommener Standard-Massenstrom heiß
+MC_MEAN = 1.2       # kg/s, angenommener Standard-Massenstrom kalt
+FLUID   = "REFPROP::R513A.MIX"
+SUBTYPE = 'crossflow, mixed Cmax'
+
+# ── 2) Vorgabe der Inlet-Temperaturen (°C) und Drücke (Pa) ────────
+Thi = 70.0    # heißes Inlet
+Tci = 15.0     # kaltes Inlet
+ph  = 30.0e5    # Druck heißer Kreislauf
+pc  = 1.0e5    # Druck kalter Kreislauf
+
+# ── 3) Umrechnung auf Kelvin ────────────────────────────────────────
+Thi_K = Thi + 273.15
+Tci_K = Tci + 273.15
+
+# ── 4) Spezifische Wärmekapazitäten via CoolProp ───────────────────
+Cph = CP.PropsSI("Cpmass", "T", Thi_K, "P", ph, FLUID)
+Cpc = CP.PropsSI("Cpmass", "T", Tci_K, "P", pc, FLUID)
+
+# ── 5) Aufruf der ε-NTU-Methode mit Median-UA ─────────────────────
+pprint(
+    effectiveness_NTU_method(
+        mh=MH_MEAN,
+        mc=MC_MEAN,
+        Cph=Cph,
+        Cpc=Cpc,
+        subtype=SUBTYPE,
+        Tci=Tci,
+        Thi=Thi,
+        UA=UA_MEAN
+    )
+)
