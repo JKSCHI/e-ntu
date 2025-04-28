@@ -1,0 +1,64 @@
+# -*- coding: utf-8 -*-
+"""
+Minimal­beispiel: ε-NTU-Berechnung für R-513A
+Autor: ChatGPT · 2025-04-28
+"""
+
+import numpy as np
+import CoolProp.CoolProp as CP
+from ht.hx import F_LMTD_Fakheri, calc_Cmin, NTU_from_UA, effectiveness_from_NTU
+
+# ── 1) Eingangsgrößen ───────────────────────────────────────────
+# Temperaturen in °C
+Thi, Tho = 130.0, 110.0   # heißer Ein- und Austritt
+Tci, Tco =  15.0,  85.0   # kalter Ein- und Austritt
+
+# Drücke in Pa
+ph, pc = 4.0e5, 1.0e5
+
+# Massenströme in kg/s
+mh, mc = 5.2, 1.45
+
+# Fluid für CoolProp (REFPROP-Backend)
+fluid = "REFPROP::R513A.MIX"
+
+# ── 2) Umrechnung in Kelvin ──────────────────────────────────────
+Thi_K = Thi + 273.15
+Tho_K = Tho + 273.15
+Tci_K = Tci + 273.15
+Tco_K = Tco + 273.15
+
+# ── 3) Spezifische Wärmekapazitäten via CoolProp ────────────────
+cph = CP.PropsSI("Cpmass", "T", 0.5*(Thi_K+Tho_K), "P", ph, fluid)
+cpc = CP.PropsSI("Cpmass", "T", 0.5*(Tci_K+Tco_K), "P", pc, fluid)
+
+# ── 4) Wärmeleistung aus Messdaten ───────────────────────────────
+Qh = mh * cph * (Thi_K - Tho_K)
+Qc = mc * cpc * (Tco_K - Tci_K)
+Q  = 0.5*(Qh + Qc)   # Konsistenter Mittelwert
+
+# ── 5) LMTD & F-Faktor (Fakheri) ─────────────────────────────────
+dT1 = Thi_K - Tco_K
+dT2 = Tho_K - Tci_K
+dT_lm = (dT1 - dT2)/np.log(dT1/dT2)  if abs(dT1-dT2)>1e-6 else dT1
+
+# F_LMTD_Fakheri erwartet °C-Eingaben:
+try:
+    F = F_LMTD_Fakheri(Tci=Tci, Tco=Tco, Thi=Thi, Tho=Tho, shells=1)
+except Exception:
+    F = 1.0  # Fallback
+
+# ── 6) UA, NTU, ε ────────────────────────────────────────────────
+UA  = Q / (F * dT_lm)
+Cmin = calc_Cmin(mh=mh, mc=mc, Cph=cph, Cpc=cpc)
+NTU = NTU_from_UA(UA=UA, Cmin=Cmin)
+Cr  = Cmin / (mc * cpc)  # oder mh*cph, je kleiner zuerst
+eps = effectiveness_from_NTU(NTU=NTU, Cr=Cr, subtype='counterflow')
+
+# ── 7) Ergebnisse ausgeben ───────────────────────────────────────
+print(f"Q    = {Q/1e3:8.2f} kW")
+print(f"UA   = {UA:8.0f} W/K")
+print(f"NTU  = {NTU:8.3f}")
+print(f"ε    = {eps:8.3f}")
+print(f"LMTD = {dT_lm:8.2f} K, F = {F:.3f}")
+print(f"cph  = {cph:.1f} J/kg/K, cpc = {cpc:.1f} J/kg/K")
